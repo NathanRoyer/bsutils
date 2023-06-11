@@ -28,7 +28,7 @@ impl<K: ?Sized, V: Clone> Clone for HashMap<K, V> {
 }
 
 impl<K: Hash + Ord + ?Sized, V> HashMap<K, V> {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             hash_to_value: LiteMap::new(),
             _data: PhantomData,
