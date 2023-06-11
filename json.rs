@@ -13,19 +13,19 @@ pub type JsonParsingError = &'static str;
 
 /// One step in a JSON state path
 #[derive(Debug, Clone, Hash)]
-pub enum StatePathStep<'a> {
+pub enum JsonPathStep<'a> {
     Key(&'a str),
     Index(usize),
 }
 
-impl<'a> From<&'a str> for StatePathStep<'a> {
-    fn from(string: &'a str) -> StatePathStep<'a> {
+impl<'a> From<&'a str> for JsonPathStep<'a> {
+    fn from(string: &'a str) -> JsonPathStep<'a> {
         Self::Key(string)
     }
 }
 
-impl<'a> From<usize> for StatePathStep<'a> {
-    fn from(index: usize) -> StatePathStep<'a> {
+impl<'a> From<usize> for JsonPathStep<'a> {
+    fn from(index: usize) -> JsonPathStep<'a> {
         Self::Index(index)
     }
 }
@@ -47,7 +47,7 @@ pub enum JsonValue {
 const _: usize = [0][(!(size_of::<JsonValue>() == 16)) as usize];
 
 /// The Path to a JSON Value, in a [`JsonFile`]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct JsonPath(AHasher);
 
 impl JsonPath {
@@ -56,17 +56,17 @@ impl JsonPath {
     }
 
     pub fn index_str(&mut self, key: &str) -> &mut Self {
-        StatePathStep::Key(&key).hash(&mut self.0);
+        JsonPathStep::Key(&key).hash(&mut self.0);
         self
     }
 
     pub fn index_num(&mut self, index: usize) -> &mut Self {
-        StatePathStep::Index(index).hash(&mut self.0);
+        JsonPathStep::Index(index).hash(&mut self.0);
         self
     }
 
     /// Appends sequential indexes from an iterator
-    pub fn append<'a, I: Into<StatePathStep<'a>>, T: IntoIterator<Item = I>>(
+    pub fn append<'a, I: Into<JsonPathStep<'a>>, T: IntoIterator<Item = I>>(
         &mut self,
         steps: T,
     ) -> &mut Self {
@@ -79,14 +79,14 @@ impl JsonPath {
 }
 
 /// Parse a string as a list of path steps
-pub fn parse_path<'a>(path: &'a str) -> impl Iterator<Item = StatePathStep<'a>> {
-    path.split('.').map(|key| match key.parse::<usize>() {
+pub fn parse_path<'a>(path: &'a str) -> impl Iterator<Item = JsonPathStep<'a>> {
+    path.split('.').filter(|k| !k.is_empty()).map(|key| match key.parse::<usize>() {
         Ok(index) => index.into(),
         Err(_) => key.into(),
     })
 }
 
-impl<'a, I: Into<StatePathStep<'a>>, T: IntoIterator<Item = I>> From<T> for JsonPath {
+impl<'a, I: Into<JsonPathStep<'a>>, T: IntoIterator<Item = I>> From<T> for JsonPath {
     fn from(steps: T) -> Self {
         Self::new().append(steps).clone()
     }
@@ -292,7 +292,7 @@ impl Index<JsonPath> for JsonFile {
     }
 }
 
-impl<'a, I: Into<StatePathStep<'a>>, T: IntoIterator<Item = I>> Index<T> for JsonFile {
+impl<'a, I: Into<JsonPathStep<'a>>, T: IntoIterator<Item = I>> Index<T> for JsonFile {
     type Output = JsonValue;
     fn index(&self, iter: T) -> &Self::Output {
         self.get(&iter.into())
@@ -438,10 +438,11 @@ fn parse_number<'a>(value: Str<'a>) -> Result<(f64, Str<'a>), JsonParsingError> 
 
     let (number, next) = value.0.split_at(len);
     match from_utf8(number) {
-        Ok(string) => match string.parse() {
+        Ok(string) => {
+            match string.parse() {
             Ok(float) => Ok((float, Str(next))),
             Err(_) => Err("invalid number"),
-        },
+        }},
         Err(_) => Err("invalid number"),
     }
 }
@@ -509,7 +510,7 @@ fn parse_value<'a>(value: Str<'a>, file: &mut JsonFile, path: &JsonPath) -> Resu
             Ok(next)
         },
         b'0'..=b'9' | b'-' => {
-            let (number, next) = parse_number(Str(value.get(1..)?))?;
+            let (number, next) = parse_number(value)?;
             file.set_number(path, number);
             Ok(next)
         },

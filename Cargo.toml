@@ -1,6 +1,6 @@
 [package]
 name = "lmfu"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = [ "Nathan ROYER <nathan.royer.pro@gmail.com>" ]
 description = "Low Memory Footprint Utilities (String, HashMap, JSON)"
@@ -13,6 +13,7 @@ repository = "https://github.com/NathanRoyer/bsutils"
 path = "lib.rs"
 
 [dependencies]
+log = "0.4.17"
 arcstr = { version = "1.1.5", optional = true }
 litemap = { version = "0.7.0", optional = true }
 ahash   = { version = "0.8.3", optional = true, default-features = false, features = [ "compile-time-rng" ] }

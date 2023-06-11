@@ -51,8 +51,9 @@ impl StringList {
                 (0, key_len)
             } else {
                 let old_len = self.0.read();
-                let new_len = size_of::<usize>() + old_len + key_len;
-                self.0 = realloc(self.0 as _, layout(old_len), new_len) as _;
+                let new_len = old_len + key_len;
+                let new_size = size_of::<usize>() + new_len;
+                self.0 = realloc(self.0 as _, layout(old_len), new_size) as _;
                 (old_len, new_len)
             };
 
