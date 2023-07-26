@@ -1,6 +1,6 @@
 [package]
 name = "lmfu"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 authors = [ "Nathan ROYER <nathan.royer.pro@gmail.com>" ]
 description = "Low Memory Footprint Utilities (String, HashMap, JSON)"

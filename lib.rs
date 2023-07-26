@@ -41,6 +41,9 @@ pub use arcstr;
 /// From the awesome [litemap](https://docs.rs/litemap) crate:
 pub use litemap::LiteMap;
 
+#[cfg(feature = "litemap")]
+pub type LiteSet<T> = LiteMap<T, ()>;
+
 #[cfg(feature = "arcstr")]
 /// From the awesome [arcstr](https://docs.rs/arcstr) crate:
 pub use arcstr::ArcStr;
@@ -48,6 +51,9 @@ pub use arcstr::ArcStr;
 #[cfg(feature = "hashmap")]
 #[doc(inline)]
 pub use hash_map::HashMap;
+
+#[cfg(feature = "hashmap")]
+pub type HashSet<T> = HashMap<T, ()>;
 
 #[cfg(feature = "stringlist")]
 #[doc(inline)]

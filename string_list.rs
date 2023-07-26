@@ -8,7 +8,7 @@ use alloc::{alloc::{Layout, alloc as alloc_fn, realloc, dealloc}};
 
 const SIZE_OF_USIZE: usize = size_of::<usize>();
 
-/// Vec<Box<str>> equivalent
+/// `Vec<Box<str>>` equivalent
 ///
 /// Internally, this is a thin pointer to a structure which
 /// looks like this: `{ count: usize, [len: usize], [byte: u8] }`
