@@ -6,26 +6,28 @@ use core::{
 };
 
 use alloc::boxed::Box;
-use super::{ArcStr, StringList, LiteMap};
+use super::{ArcStr, LiteMap};
 use ahash::AHasher;
+use strpool::{Pool, PoolStr};
+use thin_vec::ThinVec;
 
-pub type JsonParsingError = &'static str;
+pub type ParsingError = &'static str;
 
 /// One step in a JSON state path
 #[derive(Debug, Clone, Hash)]
-pub enum JsonPathStep<'a> {
+pub enum PathStep<'a> {
     Key(&'a str),
     Index(usize),
 }
 
-impl<'a> From<&'a str> for JsonPathStep<'a> {
-    fn from(string: &'a str) -> JsonPathStep<'a> {
+impl<'a> From<&'a str> for PathStep<'a> {
+    fn from(string: &'a str) -> PathStep<'a> {
         Self::Key(string)
     }
 }
 
-impl<'a> From<usize> for JsonPathStep<'a> {
-    fn from(index: usize) -> JsonPathStep<'a> {
+impl<'a> From<usize> for PathStep<'a> {
+    fn from(index: usize) -> PathStep<'a> {
         Self::Index(index)
     }
 }
@@ -34,39 +36,40 @@ pub type ArrayLength = usize;
 
 /// Standalone JSON Value (16 bytes)
 #[derive(Debug, Clone, PartialEq)]
-pub enum JsonValue {
+pub enum Value {
     Array(ArrayLength),
-    Object(StringList),
+    Object(ThinVec<PoolStr>),
     String(ArcStr),
     Number(f64),
     Boolean(bool),
     Null,
 }
 
-// Assert that the size of JsonValue is 16 bytes
-const _: usize = [0][(!(size_of::<JsonValue>() == 16)) as usize];
+// Assert that the size of Value is 16 bytes
+#[cfg(target_pointer_width = "64")]
+const _: usize = [0][(!(size_of::<Value>() == 16)) as usize];
 
 /// The Path to a JSON Value, in a [`JsonFile`]
 #[derive(Debug, Clone)]
-pub struct JsonPath(AHasher);
+pub struct Path(AHasher);
 
-impl JsonPath {
+impl Path {
     pub fn new() -> Self {
         Self(super::GEN.build_hasher())
     }
 
     pub fn index_str(&mut self, key: &str) -> &mut Self {
-        JsonPathStep::Key(&key).hash(&mut self.0);
+        PathStep::Key(&key).hash(&mut self.0);
         self
     }
 
     pub fn index_num(&mut self, index: usize) -> &mut Self {
-        JsonPathStep::Index(index).hash(&mut self.0);
+        PathStep::Index(index).hash(&mut self.0);
         self
     }
 
     /// Appends sequential indexes from an iterator
-    pub fn append<'a, I: Into<JsonPathStep<'a>>, T: IntoIterator<Item = I>>(
+    pub fn append<'a, I: Into<PathStep<'a>>, T: IntoIterator<Item = I>>(
         &mut self,
         steps: T,
     ) -> &mut Self {
@@ -79,20 +82,20 @@ impl JsonPath {
 }
 
 /// Parse a string as a list of path steps
-pub fn parse_path<'a>(path: &'a str) -> impl Iterator<Item = JsonPathStep<'a>> {
+pub fn parse_path<'a>(path: &'a str) -> impl Iterator<Item = PathStep<'a>> {
     path.split('.').filter(|k| !k.is_empty()).map(|key| match key.parse::<usize>() {
         Ok(index) => index.into(),
         Err(_) => key.into(),
     })
 }
 
-impl<'a, I: Into<JsonPathStep<'a>>, T: IntoIterator<Item = I>> From<T> for JsonPath {
+impl<'a, I: Into<PathStep<'a>>, T: IntoIterator<Item = I>> From<T> for Path {
     fn from(steps: T) -> Self {
         Self::new().append(steps).clone()
     }
 }
 
-/// A JSON File, stored in a "self-recursive" Map<u64, JsonValue>
+/// A JSON File, stored in a "self-recursive" Map<u64, Value>
 ///
 /// Note: If values are changed at some point, make sure that
 /// [`Self::remove_null`] is called after the changes have been
@@ -100,21 +103,29 @@ impl<'a, I: Into<JsonPathStep<'a>>, T: IntoIterator<Item = I>> From<T> for JsonP
 /// values are changed to Null; calling [`Self::remove_null`] is
 /// actually equivalent to a garbage collection process, in this
 /// context.
-pub struct JsonFile(LiteMap<u64, JsonValue>);
+///
+/// Note: Object keys are stored in a [`Pool`]
+pub struct JsonFile {
+    map: LiteMap<u64, Value>,
+    keys: Pool,
+}
 
 impl JsonFile {
     /// Deserializes a JSON file
-    pub fn parse(json: &str) -> Result<Self, JsonParsingError> {
-        let mut file = Self(LiteMap::new());
-        let rem = parse_value(Str(json.as_bytes()), &mut file, &JsonPath::new())?;
+    pub fn parse(json: &str) -> Result<Self, ParsingError> {
+        let mut this = Self {
+            map: LiteMap::new(),
+            keys: Pool::new(),
+        };
+        let rem = parse_value(Str(json.as_bytes()), &mut this, &Path::new())?;
         match skip_ws(rem) {
-            Err(_) => Ok(file),
+            Err(_) => Ok(this),
             Ok(_) => Err("unexpected token (5)"),
         }
     }
 
-    pub fn get(&self, path: &JsonPath) -> &JsonValue {
-        self.0.get(&path.0.finish()).unwrap_or(&JsonValue::Null)
+    pub fn get(&self, path: &Path) -> &Value {
+        self.map.get(&path.0.finish()).unwrap_or(&Value::Null)
     }
 
     /// Efficiently removes all Null values from the file.
@@ -123,24 +134,24 @@ impl JsonFile {
     /// an object, the key/index will persist, but the actual
     /// value will be removed.
     pub fn remove_null(&mut self) {
-        self.0.retain(|_k, v| !matches!(v, JsonValue::Null))
+        self.map.retain(|_k, v| !matches!(v, Value::Null))
     }
 
-    fn insert_gc(&mut self, path: &JsonPath, value: JsonValue) {
-        let old_value = self.0.insert(path.0.finish(), value);
+    fn insert_gc(&mut self, path: &Path, value: Value) {
+        let old_value = self.map.insert(path.0.finish(), value);
         match old_value {
-            Some(JsonValue::Array(num)) => {
+            Some(Value::Array(num)) => {
                 for i in 0..num {
                     let mut path = path.clone();
                     path.index_num(i);
-                    self.insert_gc(&path, JsonValue::Null);
+                    self.insert_gc(&path, Value::Null);
                 }
             },
-            Some(JsonValue::Object(keys)) => {
+            Some(Value::Object(keys)) => {
                 for key in keys.iter() {
                     let mut path = path.clone();
                     path.index_str(key);
-                    self.insert_gc(&path, JsonValue::Null);
+                    self.insert_gc(&path, Value::Null);
                 }
             },
             _ => (),
@@ -148,45 +159,45 @@ impl JsonFile {
     }
 
     /// Create an array in the JSON file
-    pub fn set_array(&mut self, path: &JsonPath) {
-        self.insert_gc(path, JsonValue::Array(0));
+    pub fn set_array(&mut self, path: &Path) {
+        self.insert_gc(path, Value::Array(0));
     }
 
     /// Create an object in the JSON file
-    pub fn set_object(&mut self, path: &JsonPath) {
-        self.insert_gc(path, JsonValue::Object(StringList::new()));
+    pub fn set_object(&mut self, path: &Path) {
+        self.insert_gc(path, Value::Object(ThinVec::new()));
     }
 
     /// Insert a number in the JSON file
-    pub fn set_number(&mut self, path: &JsonPath, value: f64) {
-        self.insert_gc(path, JsonValue::Number(value));
+    pub fn set_number(&mut self, path: &Path, value: f64) {
+        self.insert_gc(path, Value::Number(value));
     }
 
     /// Insert a string in the JSON file
-    pub fn set_string(&mut self, path: &JsonPath, value: ArcStr) {
-        self.insert_gc(path, JsonValue::String(value));
+    pub fn set_string(&mut self, path: &Path, value: ArcStr) {
+        self.insert_gc(path, Value::String(value));
     }
 
     /// Insert a boolean in the JSON file
-    pub fn set_boolean(&mut self, path: &JsonPath, value: bool) {
-        self.insert_gc(path, JsonValue::Boolean(value));
+    pub fn set_boolean(&mut self, path: &Path, value: bool) {
+        self.insert_gc(path, Value::Boolean(value));
     }
 
     /// Add an item to an array from the JSON file
     ///
-    /// The returned [`JsonPath`] leads to the new item.
+    /// The returned [`Path`] leads to the new item.
     ///
     /// Caution: this panics if the specified path leads to
-    /// a value which isn't a [`JsonValue::Array`]
-    pub fn push(&mut self, path: &JsonPath) -> JsonPath {
-        let val = self.0.get_mut(&path.0.finish());
+    /// a value which isn't a [`Value::Array`]
+    pub fn push(&mut self, path: &Path) -> Path {
+        let val = self.map.get_mut(&path.0.finish());
         let mut path = path.clone();
 
-        if let Some(JsonValue::Array(num)) = val {
+        if let Some(Value::Array(num)) = val {
             path.index_num(*num);
             *num += 1;
         } else {
-            panic!("JsonValue at `path` is not an array");
+            panic!("Value at `path` is not an array");
         }
 
         path
@@ -194,31 +205,28 @@ impl JsonFile {
 
     /// Add a property to an object from the JSON file
     ///
-    /// The returned [`JsonPath`] leads to the new property.
+    /// The returned [`Path`] leads to the new property.
     ///
     /// Caution: this panics if the specified path leads to
-    /// a value which isn't a [`JsonValue::Object`]
-    ///
-    /// Note: This may re-allocate to expand the [`StringList`]
-    /// key list.
-    pub fn prop(&mut self, path: &JsonPath, key: &str) -> JsonPath {
-        let val = self.0.get_mut(&path.0.finish());
+    /// a value which isn't a [`Value::Object`]
+    pub fn prop(&mut self, path: &Path, key: &str) -> Path {
+        let val = self.map.get_mut(&path.0.finish());
         let mut path = path.clone();
 
-        if let Some(JsonValue::Object(keys)) = val {
+        if let Some(Value::Object(keys)) = val {
             path.index_str(key);
-            keys.push(key);
+            keys.push(self.keys.intern(key));
         } else {
-            panic!("JsonValue at `path` is not an object");
+            panic!("Value at `path` is not an object");
         }
 
         path
     }
 
     /// Writes some part of this JSON file to a [`fmt::Write`] implementor
-    pub fn dump_to<T: fmt::Write>(&self, f: &mut T, path: &JsonPath) -> fmt::Result {
+    pub fn dump_to<T: fmt::Write>(&self, f: &mut T, path: &Path) -> fmt::Result {
         match self.get(path) {
-            JsonValue::Array(num) => {
+            Value::Array(num) => {
                 write!(f, "[ ")?;
                 for i in 0..*num {
                     let mut path = path.clone();
@@ -231,7 +239,7 @@ impl JsonFile {
                 }
                 write!(f, " ]")
             },
-            JsonValue::Object(keys) => {
+            Value::Object(keys) => {
                 write!(f, "{{ ")?;
                 let mut iter = keys.iter();
                 let mut value = iter.next();
@@ -249,15 +257,15 @@ impl JsonFile {
                 }
                 write!(f, " }}")
             },
-            JsonValue::String(string) => write!(f, "{:?}", string),
-            JsonValue::Number(num) => write!(f, "{}", num),
-            JsonValue::Boolean(b) => write!(f, "{:?}", b),
-            JsonValue::Null => write!(f, "null"),
+            Value::String(string) => write!(f, "{:?}", string),
+            Value::Number(num) => write!(f, "{}", num),
+            Value::Boolean(b) => write!(f, "{:?}", b),
+            Value::Null => write!(f, "null"),
         }
     }
 
     /// Writes some part of this JSON file to a [`ArcStr`]
-    pub fn dump(&self, path: &JsonPath) -> Result<ArcStr, fmt::Error> {
+    pub fn dump(&self, path: &Path) -> Result<ArcStr, fmt::Error> {
         let mut string = alloc::string::String::new();
         self.dump_to(&mut string, path)?;
         Ok(string.into())
@@ -267,33 +275,33 @@ impl JsonFile {
 /// Dumps the whole JSON File
 impl fmt::Display for JsonFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.dump_to(f, &JsonPath::new())
+        self.dump_to(f, &Path::new())
     }
 }
 
-impl Index<&JsonPath> for JsonFile {
-    type Output = JsonValue;
-    fn index(&self, path: &JsonPath) -> &Self::Output {
+impl Index<&Path> for JsonFile {
+    type Output = Value;
+    fn index(&self, path: &Path) -> &Self::Output {
         self.get(path)
     }
 }
 
-impl Index<&mut JsonPath> for JsonFile {
-    type Output = JsonValue;
-    fn index(&self, path: &mut JsonPath) -> &Self::Output {
+impl Index<&mut Path> for JsonFile {
+    type Output = Value;
+    fn index(&self, path: &mut Path) -> &Self::Output {
         self.get(path)
     }
 }
 
-impl Index<JsonPath> for JsonFile {
-    type Output = JsonValue;
-    fn index(&self, path: JsonPath) -> &Self::Output {
+impl Index<Path> for JsonFile {
+    type Output = Value;
+    fn index(&self, path: Path) -> &Self::Output {
         self.get(&path)
     }
 }
 
-impl<'a, I: Into<JsonPathStep<'a>>, T: IntoIterator<Item = I>> Index<T> for JsonFile {
-    type Output = JsonValue;
+impl<'a, I: Into<PathStep<'a>>, T: IntoIterator<Item = I>> Index<T> for JsonFile {
+    type Output = Value;
     fn index(&self, iter: T) -> &Self::Output {
         self.get(&iter.into())
     }
@@ -304,7 +312,7 @@ impl<'a, I: Into<JsonPathStep<'a>>, T: IntoIterator<Item = I>> Index<T> for Json
 struct Str<'a>(&'a [u8]);
 
 impl<'a> Str<'a> {
-    fn get<I: SliceIndex<[u8]>>(&self, i: I) -> Result<&'a I::Output, JsonParsingError> {
+    fn get<I: SliceIndex<[u8]>>(&self, i: I) -> Result<&'a I::Output, ParsingError> {
         match self.0.get(i) {
             Some(v) => Ok(v),
             None => Err("json input looks truncated"),
@@ -312,7 +320,7 @@ impl<'a> Str<'a> {
     }
 }
 
-fn skip_ws<'a>(json: Str<'a>) -> Result<Str<'a>, JsonParsingError> {
+fn skip_ws<'a>(json: Str<'a>) -> Result<Str<'a>, ParsingError> {
     match json.get(0)? {
         b'\t' |
         b'\n' |
@@ -322,7 +330,7 @@ fn skip_ws<'a>(json: Str<'a>) -> Result<Str<'a>, JsonParsingError> {
     }
 }
 
-fn parse_string_for_real<'a>(mut string: Str<'a>, char_count: usize) -> Result<ArcStr, JsonParsingError> {
+fn parse_string_for_real<'a>(mut string: Str<'a>, char_count: usize) -> Result<ArcStr, ParsingError> {
     let mut pending: Option<(usize, usize, [u8; 4])> = None;
 
     // todo: impl TryFrom<Box<[u8]>> for ArcStr
@@ -382,7 +390,7 @@ fn parse_string_for_real<'a>(mut string: Str<'a>, char_count: usize) -> Result<A
     }
 }
 
-fn parse_string<'a>(backup: Str<'a>) -> Result<(ArcStr, Str<'a>), JsonParsingError> {
+fn parse_string<'a>(backup: Str<'a>) -> Result<(ArcStr, Str<'a>), ParsingError> {
     let mut string = Str(backup.0);
     let mut char_count = 0;
 
@@ -421,7 +429,7 @@ fn parse_string<'a>(backup: Str<'a>) -> Result<(ArcStr, Str<'a>), JsonParsingErr
     return Ok((ro_heap_string, Str(backup.get(offset..)?)));
 }
 
-fn parse_number<'a>(value: Str<'a>) -> Result<(f64, Str<'a>), JsonParsingError> {
+fn parse_number<'a>(value: Str<'a>) -> Result<(f64, Str<'a>), ParsingError> {
     let mut len = 0;
     for character in value.0 {
         match character {
@@ -447,7 +455,7 @@ fn parse_number<'a>(value: Str<'a>) -> Result<(f64, Str<'a>), JsonParsingError> 
     }
 }
 
-fn parse_value<'a>(value: Str<'a>, file: &mut JsonFile, path: &JsonPath) -> Result<Str<'a>, JsonParsingError> {
+fn parse_value<'a>(value: Str<'a>, file: &mut JsonFile, path: &Path) -> Result<Str<'a>, ParsingError> {
     let value = skip_ws(value)?;
     match value.get(0)? {
         b'{' => {
@@ -549,3 +557,10 @@ static HEX: [u8; 256] = {
         __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // F
     ]
 };
+
+#[test]
+fn quick_test() {
+    let text = "{ \"name\": \"Default Theme\", \"version\": 0, \"styles\": { \"default\": { \"background\": \"222F\", \"foreground\": \"EEEF\", \"outline\": \"999F\" } } }";
+    let json = JsonFile::parse(text).unwrap();
+    assert_eq!(text, &*json.dump(&Path::new()).unwrap());
+}

@@ -25,9 +25,6 @@ pub(crate) static GEN: RandomState = RandomState::with_seeds(
 #[cfg(feature = "hashmap")]
 pub mod hash_map;
 
-#[cfg(feature = "stringlist")]
-pub mod string_list;
-
 #[cfg(feature = "json")]
 pub mod json;
 
@@ -55,6 +52,7 @@ pub use hash_map::HashMap;
 #[cfg(feature = "hashmap")]
 pub type HashSet<T> = HashMap<T, ()>;
 
-#[cfg(feature = "stringlist")]
-#[doc(inline)]
-pub use string_list::StringList;
+
+#[cfg(feature = "thinvec")]
+/// From the awesome [thin-vec](https://docs.rs/thin-vec) crate:
+pub use thin_vec::ThinVec;
