@@ -1,8 +1,8 @@
 //! Compact & garbage-collected JSON Storage, with (de)serialization
 
 use core::{
-    slice::SliceIndex, fmt, str::from_utf8, mem::size_of,
     hash::{Hash, Hasher, BuildHasher}, ops::Index,
+    slice::SliceIndex, fmt, str::from_utf8,
 };
 
 use alloc::boxed::Box;
@@ -47,7 +47,7 @@ pub enum Value {
 
 // Assert that the size of Value is 16 bytes
 #[cfg(target_pointer_width = "64")]
-const _: usize = [0][(!(size_of::<Value>() == 16)) as usize];
+const _: usize = [0][(!(core::mem::size_of::<Value>() == 16)) as usize];
 
 /// The Path to a JSON Value, in a [`JsonFile`]
 #[derive(Debug, Clone)]
@@ -104,22 +104,37 @@ impl<'a, I: Into<PathStep<'a>>, T: IntoIterator<Item = I>> From<T> for Path {
 /// actually equivalent to a garbage collection process, in this
 /// context.
 ///
-/// Note: Object keys are stored in a [`Pool`]
+/// Note: Object keys are stored in a [`Pool`], which makes this
+/// well suited for parsing large arrays of objects with similar
+/// layouts.
 pub struct JsonFile {
     map: LiteMap<u64, Value>,
     keys: Pool,
 }
 
 impl JsonFile {
-    /// Deserializes a JSON file
-    pub fn parse(json: &str) -> Result<Self, ParsingError> {
-        let mut this = Self {
+    /// Creates a new JSON file (optionally from a JSON string)
+    pub fn new(json: Option<&str>) -> Result<Self, ParsingError> {
+        Self::with_key_pool(json, Pool::new())
+    }
+
+    /// Creates a new JSON file using an existing key string pool (optionally from a JSON string)
+    pub fn with_key_pool(json: Option<&str>, keys: Pool) -> Result<Self, ParsingError> {
+        let this = Self {
             map: LiteMap::new(),
-            keys: Pool::new(),
+            keys,
         };
-        let rem = parse_value(Str(json.as_bytes()), &mut this, &Path::new())?;
+
+        match json {
+            Some(json) => this.parse(json),
+            None => Ok(this),
+        }
+    }
+
+    fn parse(mut self, json: &str) -> Result<Self, ParsingError> {
+        let rem = parse_value(Str(json.as_bytes()), &mut self, &Path::new())?;
         match skip_ws(rem) {
-            Err(_) => Ok(this),
+            Err(_) => Ok(self),
             Ok(_) => Err("unexpected token (5)"),
         }
     }
@@ -135,6 +150,11 @@ impl JsonFile {
     /// value will be removed.
     pub fn remove_null(&mut self) {
         self.map.retain(|_k, v| !matches!(v, Value::Null))
+    }
+
+    /// Removes a value and all its eventual content.
+    pub fn remove(&mut self, path: &Path) {
+        self.insert_gc(path, Value::Null);
     }
 
     fn insert_gc(&mut self, path: &Path, value: Value) {
@@ -203,9 +223,34 @@ impl JsonFile {
         path
     }
 
+    /// Iterates on the items in an array
+    ///
+    /// Yields zero item if the value at `base_path`
+    /// is not an array.
+    pub fn iter_array(&self, base_path: &Path) -> ArrayIter {
+        let value = self.map.get(&base_path.0.finish());
+        let base_path = base_path.clone();
+        if let Some(Value::Array(len)) = value {
+            ArrayIter {
+                state: self,
+                base_path,
+                next: 0,
+                len: *len,
+            }
+        } else {
+            ArrayIter {
+                state: self,
+                base_path,
+                next: 0,
+                len: 0,
+            }
+        }
+    }
+
     /// Add a property to an object from the JSON file
     ///
     /// The returned [`Path`] leads to the new property.
+    /// Has no effect no the file if the property already exists.
     ///
     /// Caution: this panics if the specified path leads to
     /// a value which isn't a [`Value::Object`]
@@ -215,7 +260,10 @@ impl JsonFile {
 
         if let Some(Value::Object(keys)) = val {
             path.index_str(key);
-            keys.push(self.keys.intern(key));
+            let interned = self.keys.intern(key);
+            if !keys.contains(&interned) {
+                keys.push(interned);
+            }
         } else {
             panic!("Value at `path` is not an object");
         }
@@ -231,10 +279,13 @@ impl JsonFile {
                 for i in 0..*num {
                     let mut path = path.clone();
                     path.index_num(i);
-                    self.dump_to(f, &path)?;
 
-                    if (i + 1) != *num {
-                        write!(f, ", ")?;
+                    if self.get(&path) != &Value::Null {
+                        self.dump_to(f, &path)?;
+
+                        if (i + 1) != *num {
+                            write!(f, ", ")?;
+                        }
                     }
                 }
                 write!(f, " ]")
@@ -244,14 +295,17 @@ impl JsonFile {
                 let mut iter = keys.iter();
                 let mut value = iter.next();
                 while let Some(key) = value {
-                    write!(f, "{:?}: ", key)?;
-
                     let mut path = path.clone();
                     path.index_str(key);
-                    self.dump_to(f, &path)?;
+                    let is_null = self.get(&path) == &Value::Null;
+
+                    if !is_null {
+                        write!(f, "{:?}: ", key)?;
+                        self.dump_to(f, &path)?;
+                    }
 
                     value = iter.next();
-                    if value.is_some() {
+                    if value.is_some() && !is_null {
                         write!(f, ", ")?;
                     }
                 }
@@ -402,6 +456,7 @@ fn parse_string<'a>(backup: Str<'a>) -> Result<(ArcStr, Str<'a>), ParsingError> 
                 b'f' | b'n' | b'r' | b't' => (1, 2),
                 b'u' => {
                     type U = usize;
+                    string.get(2..6)?;
                     let (a, b, c, d) = (string.0[2], string.0[3], string.0[4], string.0[5]);
                     let (a, b, c, d) = (HEX[a as U], HEX[b as U], HEX[c as U], HEX[d as U]);
 
@@ -446,11 +501,10 @@ fn parse_number<'a>(value: Str<'a>) -> Result<(f64, Str<'a>), ParsingError> {
 
     let (number, next) = value.0.split_at(len);
     match from_utf8(number) {
-        Ok(string) => {
-            match string.parse() {
+        Ok(string) => match string.parse() {
             Ok(float) => Ok((float, Str(next))),
             Err(_) => Err("invalid number"),
-        }},
+        },
         Err(_) => Err("invalid number"),
     }
 }
@@ -535,6 +589,40 @@ fn parse_value<'a>(value: Str<'a>, file: &mut JsonFile, path: &Path) -> Result<S
     }
 }
 
+/// Cloning this is cheap
+pub struct ArrayIter<'a> {
+    state: &'a JsonFile,
+    base_path: Path,
+    next: usize,
+    len: usize,
+}
+
+impl<'a> Iterator for ArrayIter<'a> {
+    type Item = (usize, &'a JsonFile, Path);
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next < self.len {
+            let mut path = self.base_path.clone();
+            let index = self.next;
+            path.index_num(index);
+            self.next += 1;
+            Some((index, self.state, path))
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> Clone for ArrayIter<'a> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state,
+            base_path: self.base_path.clone(),
+            next: self.next,
+            len: self.len,
+        }
+    }
+}
+
 static HEX: [u8; 256] = {
     const __: u8 = 255; // not a hex digit
     [
@@ -561,6 +649,9 @@ static HEX: [u8; 256] = {
 #[test]
 fn quick_test() {
     let text = "{ \"name\": \"Default Theme\", \"version\": 0, \"styles\": { \"default\": { \"background\": \"222F\", \"foreground\": \"EEEF\", \"outline\": \"999F\" } } }";
-    let json = JsonFile::parse(text).unwrap();
+    let json = JsonFile::new(Some(text)).unwrap();
     assert_eq!(text, &*json.dump(&Path::new()).unwrap());
+    core::mem::drop(json);
+
+    assert_eq!(Err("json input looks truncated"), JsonFile::new(Some("\"\\u\"")).map(|_| ()));
 }

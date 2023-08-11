@@ -105,8 +105,6 @@ dependencies = [
 [[package]]
 name = "strpool"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "934d2e57b5e9b2c1251ae71c94a46ad0df626f22457c32b29453c1195a1b627f"
 dependencies = [
  "ahash",
  "rand",
