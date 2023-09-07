@@ -1,6 +1,6 @@
 [package]
 name = "lmfu"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 authors = [ "Nathan ROYER <nathan.royer.pro@gmail.com>" ]
 description = "Low Memory Footprint Utilities (String, HashMap, JSON)"
@@ -17,7 +17,11 @@ litemap  = { version = "0.7.0", optional = true }
 strpool  = { version = "1.0.1", optional = true }
 arcstr   = { version = "1.1.5", optional = true, default-features = false }
 ahash    = { version = "0.8.3", optional = true, default-features = false }
-thin-vec = { version = "0.2.12", optional = true }
+
+[dependencies.thin-vec]
+git = "https://github.com/NathanRoyer/thin-vec.git"
+optional = true
+default-features = false
 
 [features]
 default = [ "hashmap", "litemap", "json", "arcstr", "thinvec" ]
