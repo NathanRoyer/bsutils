@@ -20,8 +20,9 @@ ahash    = { version = "0.8.3", optional = true, default-features = false }
 
 [dependencies.thin-vec]
 git = "https://github.com/NathanRoyer/thin-vec.git"
-optional = true
 default-features = false
+version = "0.2.12"
+optional = true
 
 [features]
 default = [ "hashmap", "litemap", "json", "arcstr", "thinvec" ]
