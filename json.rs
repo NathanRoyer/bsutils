@@ -6,10 +6,9 @@ use core::{
 };
 
 use alloc::boxed::Box;
-use super::{ArcStr, LiteMap};
+use super::{ArcStr, LiteMap, ThinVec};
 use ahash::AHasher;
 use strpool::{Pool, PoolStr};
-use thin_vec::ThinVec;
 
 pub type ParsingError = &'static str;
 

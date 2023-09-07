@@ -54,5 +54,8 @@ pub type HashSet<T> = HashMap<T, ()>;
 
 
 #[cfg(feature = "thinvec")]
-/// From the awesome [thin-vec](https://docs.rs/thin-vec) crate:
+mod thin_vec;
+
+#[cfg(feature = "thinvec")]
+/// From the awesome [thin-vec](https://docs.rs/thin-vec/0.2.12) crate:
 pub use thin_vec::ThinVec;
