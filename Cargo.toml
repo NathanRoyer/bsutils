@@ -1,6 +1,6 @@
 [package]
 name = "lmfu"
-version = "1.2.1"
+version = "1.2.2"
 edition = "2021"
 authors = [ "Nathan ROYER <nathan.royer.pro@gmail.com>" ]
 description = "Low Memory Footprint Utilities (String, HashMap, JSON)"
@@ -20,8 +20,8 @@ ahash    = { version = "0.8.3", optional = true, default-features = false }
 
 [dependencies.thin-vec]
 git = "https://github.com/NathanRoyer/thin-vec.git"
+rev = "08c22b8"
 default-features = false
-version = "0.2.12"
 optional = true
 
 [features]
