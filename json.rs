@@ -8,7 +8,7 @@ use core::{
 use alloc::boxed::Box;
 use super::{ArcStr, LiteMap, ThinVec};
 use ahash::AHasher;
-use strpool::{Pool, PoolStr};
+use super::strpool::{Pool, PoolStr};
 
 pub type ParsingError = &'static str;
 
@@ -57,12 +57,12 @@ impl Path {
         Self(super::GEN.build_hasher())
     }
 
-    pub fn index_str(&mut self, key: &str) -> &mut Self {
+    pub fn i_str(mut self, key: &str) -> Self {
         PathStep::Key(&key).hash(&mut self.0);
         self
     }
 
-    pub fn index_num(&mut self, index: usize) -> &mut Self {
+    pub fn i_num(mut self, index: usize) -> Self {
         PathStep::Index(index).hash(&mut self.0);
         self
     }
@@ -71,12 +71,10 @@ impl Path {
     pub fn append<'a, I: Into<PathStep<'a>>, T: IntoIterator<Item = I>>(
         &mut self,
         steps: T,
-    ) -> &mut Self {
+    ) {
         for step in steps.into_iter() {
             step.into().hash(&mut self.0);
         }
-
-        self
     }
 }
 
@@ -90,7 +88,9 @@ pub fn parse_path<'a>(path: &'a str) -> impl Iterator<Item = PathStep<'a>> {
 
 impl<'a, I: Into<PathStep<'a>>, T: IntoIterator<Item = I>> From<T> for Path {
     fn from(steps: T) -> Self {
-        Self::new().append(steps).clone()
+        let mut this = Self::new();
+        this.append(steps);
+        this
     }
 }
 
@@ -161,16 +161,12 @@ impl JsonFile {
         match old_value {
             Some(Value::Array(num)) => {
                 for i in 0..num {
-                    let mut path = path.clone();
-                    path.index_num(i);
-                    self.insert_gc(&path, Value::Null);
+                    self.insert_gc(&path.clone().i_num(i), Value::Null);
                 }
             },
             Some(Value::Object(keys)) => {
                 for key in keys.iter() {
-                    let mut path = path.clone();
-                    path.index_str(key);
-                    self.insert_gc(&path, Value::Null);
+                    self.insert_gc(&path.clone().i_str(key), Value::Null);
                 }
             },
             _ => (),
@@ -208,12 +204,10 @@ impl JsonFile {
     ///
     /// Caution: this panics if the specified path leads to
     /// a value which isn't a [`Value::Array`]
-    pub fn push(&mut self, path: &Path) -> Path {
+    pub fn push(&mut self, mut path: Path) -> Path {
         let val = self.map.get_mut(&path.0.finish());
-        let mut path = path.clone();
-
         if let Some(Value::Array(num)) = val {
-            path.index_num(*num);
+            path = path.i_num(*num);
             *num += 1;
         } else {
             panic!("Value at `path` is not an array");
@@ -253,12 +247,10 @@ impl JsonFile {
     ///
     /// Caution: this panics if the specified path leads to
     /// a value which isn't a [`Value::Object`]
-    pub fn prop(&mut self, path: &Path, key: &str) -> Path {
+    pub fn prop(&mut self, mut path: Path, key: &str) -> Path {
         let val = self.map.get_mut(&path.0.finish());
-        let mut path = path.clone();
-
         if let Some(Value::Object(keys)) = val {
-            path.index_str(key);
+            path = path.i_str(key);
             let interned = self.keys.intern(key);
             if !keys.contains(&interned) {
                 keys.push(interned);
@@ -276,10 +268,7 @@ impl JsonFile {
             Value::Array(num) => {
                 write!(f, "[ ")?;
                 for i in 0..*num {
-                    let mut path = path.clone();
-                    path.index_num(i);
-
-                    if self.get(&path) != &Value::Null {
+                    if self.get(&path.clone().i_num(i)) != &Value::Null {
                         self.dump_to(f, &path)?;
 
                         if (i + 1) != *num {
@@ -294,9 +283,7 @@ impl JsonFile {
                 let mut iter = keys.iter();
                 let mut value = iter.next();
                 while let Some(key) = value {
-                    let mut path = path.clone();
-                    path.index_str(key);
-                    let is_null = self.get(&path) == &Value::Null;
+                    let is_null = self.get(&path.clone().i_str(key)) == &Value::Null;
 
                     if !is_null {
                         write!(f, "{:?}: ", key)?;
@@ -533,7 +520,7 @@ fn parse_value<'a>(value: Str<'a>, file: &mut JsonFile, path: &Path) -> Result<S
 
                 object_body = skip_ws(Str(object_body.get(1..)?))?;
 
-                let path = file.prop(path, &key);
+                let path = file.prop(path.clone(), &key);
                 let next = parse_value(object_body, file, &path)?;
                 object_body = skip_ws(next)?;
 
@@ -554,7 +541,7 @@ fn parse_value<'a>(value: Str<'a>, file: &mut JsonFile, path: &Path) -> Result<S
             }
 
             loop {
-                let path = file.push(path);
+                let path = file.push(path.clone());
                 let next = parse_value(array_body, file, &path)?;
                 array_body = skip_ws(next)?;
 
@@ -600,9 +587,8 @@ impl<'a> Iterator for ArrayIter<'a> {
     type Item = (usize, &'a JsonFile, Path);
     fn next(&mut self) -> Option<Self::Item> {
         if self.next < self.len {
-            let mut path = self.base_path.clone();
             let index = self.next;
-            path.index_num(index);
+            let path = self.base_path.clone().i_num(index);
             self.next += 1;
             Some((index, self.state, path))
         } else {
@@ -618,6 +604,43 @@ impl<'a> Clone for ArrayIter<'a> {
             base_path: self.base_path.clone(),
             next: self.next,
             len: self.len,
+        }
+    }
+}
+
+impl Value {
+    pub fn as_array(&self) -> Option<ArrayLength> {
+        match self {
+            Self::Array(inner) => Some(*inner),
+            _ => None,
+        }
+    }
+
+    pub fn as_object(&self) -> Option<&ThinVec<PoolStr>> {
+        match self {
+            Self::Object(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    pub fn as_string(&self) -> Option<&ArcStr> {
+        match self {
+            Self::String(inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    pub fn as_num(&self) -> Option<f64> {
+        match self {
+            Self::Number(inner) => Some(*inner),
+            _ => None,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Boolean(inner) => Some(*inner),
+            _ => None,
         }
     }
 }
