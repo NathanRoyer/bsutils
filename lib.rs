@@ -28,11 +28,11 @@ pub mod hash_map;
 #[cfg(feature = "json")]
 pub mod json;
 
+#[cfg(feature = "strpool")]
+pub use strpool;
+
 #[cfg(feature = "litemap")]
 pub use litemap;
-
-#[cfg(feature = "arcstr")]
-pub use arcstr;
 
 #[cfg(feature = "litemap")]
 /// From the awesome [litemap](https://docs.rs/litemap) crate:
@@ -40,6 +40,9 @@ pub use litemap::LiteMap;
 
 #[cfg(feature = "litemap")]
 pub type LiteSet<T> = LiteMap<T, ()>;
+
+#[cfg(feature = "arcstr")]
+pub use arcstr;
 
 #[cfg(feature = "arcstr")]
 /// From the awesome [arcstr](https://docs.rs/arcstr) crate:
@@ -52,6 +55,12 @@ pub use hash_map::HashMap;
 #[cfg(feature = "hashmap")]
 pub type HashSet<T> = HashMap<T, ()>;
 
+#[cfg(feature = "arrayvec")]
+pub use arrayvec;
+
+#[cfg(feature = "arrayvec")]
+/// From the awesome [arrayvec](https://docs.rs/arrayvec) crate:
+pub use arrayvec::ArrayVec;
 
 #[cfg(feature = "thinvec")]
 mod thin_vec;

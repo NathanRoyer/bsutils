@@ -35,6 +35,10 @@ impl<K: Hash + Ord + ?Sized, V> HashMap<K, V> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.hash_to_value.len()
+    }
+
     pub fn insert_ref(&mut self, key: &K, value: V) -> Option<V> {
         let mut hasher = super::GEN.build_hasher();
         key.hash(&mut hasher);
