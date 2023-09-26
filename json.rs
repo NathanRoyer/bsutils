@@ -268,8 +268,9 @@ impl JsonFile {
             Value::Array(num) => {
                 write!(f, "[ ")?;
                 for i in 0..*num {
-                    if self.get(&path.clone().i_num(i)) != &Value::Null {
-                        self.dump_to(f, &path)?;
+                    let item_path = path.clone().i_num(i);
+                    if self.get(&item_path) != &Value::Null {
+                        self.dump_to(f, &item_path)?;
 
                         if (i + 1) != *num {
                             write!(f, ", ")?;
@@ -283,11 +284,12 @@ impl JsonFile {
                 let mut iter = keys.iter();
                 let mut value = iter.next();
                 while let Some(key) = value {
-                    let is_null = self.get(&path.clone().i_str(key)) == &Value::Null;
+                    let prop_path = path.clone().i_str(key);
+                    let is_null = self.get(&prop_path) == &Value::Null;
 
                     if !is_null {
                         write!(f, "{:?}: ", key)?;
-                        self.dump_to(f, &path)?;
+                        self.dump_to(f, &prop_path)?;
                     }
 
                     value = iter.next();

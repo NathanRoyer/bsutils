@@ -12,7 +12,7 @@ use litemap::LiteMap;
 /// 3. the search result is returned
 ///
 /// Note: non-sized keys are supported (`str`, for instance).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct HashMap<K: ?Sized, V> {
     pub hash_to_value: LiteMap<u64, V>,
     _data: PhantomData<K>,
